@@ -18,21 +18,32 @@ package com.example.android.mediarecorder;
 
 import android.annotation.TargetApi;
 import android.app.Activity;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.ImageFormat;
+import android.graphics.Rect;
+import android.graphics.SurfaceTexture;
+import android.graphics.YuvImage;
 import android.hardware.Camera;
 import android.media.CamcorderProfile;
 import android.media.MediaRecorder;
 import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.util.Log;
 import android.view.Menu;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.TextureView;
 import android.view.View;
 import android.widget.Button;
 
 import com.example.android.common.media.CameraHelper;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.List;
 
@@ -41,8 +52,11 @@ import java.util.List;
  *  A {@link android.view.TextureView} is used as the camera preview which limits the code to API 14+. This
  *  can be easily replaced with a {@link android.view.SurfaceView} to run on older devices.
  */
-public class MainActivity extends Activity {
+public class MainActivity extends Activity implements
+        SurfaceHolder.Callback, Camera.PreviewCallback {
 
+    private SurfaceHolder sHolder;
+    private SurfaceView surfaceView;
     private Camera mCamera;
     private TextureView mPreview;
     private MediaRecorder mMediaRecorder;
@@ -51,14 +65,24 @@ public class MainActivity extends Activity {
     private boolean isRecording = false;
     private static final String TAG = "Recorder";
     private Button captureButton;
+    private static int frameCount = 0;
+    private static String storagePath = Environment.getExternalStorageDirectory().getPath() + "/recorder";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.sample_main);
 
+        surfaceView = (SurfaceView)findViewById(R.id.surface_view1);
         mPreview = (TextureView) findViewById(R.id.surface_view);
         captureButton = (Button) findViewById(R.id.button_capture);
+
+        sHolder = surfaceView.getHolder();
+        sHolder.addCallback(this);
+        sHolder.setType(SurfaceHolder.SURFACE_TYPE_NORMAL);
+
+        mPreview.setSurfaceTextureListener(textureListener);
+
     }
 
     /**
@@ -159,10 +183,20 @@ public class MainActivity extends Activity {
         // likewise for the camera object itself.
         parameters.setPreviewSize(profile.videoFrameWidth, profile.videoFrameHeight);
         mCamera.setParameters(parameters);
+
+        mCamera.setPreviewCallbackWithBuffer(this);
+
         try {
                 // Requires API level 11+, For backward compatibility use {@link setPreviewDisplay}
                 // with {@link SurfaceView}
                 mCamera.setPreviewTexture(mPreview.getSurfaceTexture());
+
+                /*mCamera.setPreviewDisplay(sHolder);
+                mCamera.startPreview();
+                mCamera.setPreviewCallback(this);*/
+
+                //mCamera.setPreviewCallback(mCameraCallback);
+
         } catch (IOException e) {
             Log.e(TAG, "Surface texture is unavailable or unsuitable" + e.getMessage());
             return false;
@@ -204,8 +238,143 @@ public class MainActivity extends Activity {
             releaseMediaRecorder();
             return false;
         }
+
+
+
+        //mMediaRecorder.setPreviewDisplay(sHolder.getSurface());
+        //mMediaRecorder.stop();
+
+        /*try{
+            mCamera.reconnect();
+            mCamera.setPreviewDisplay(sHolder);
+            mCamera.startPreview();
+
+            mCamera.setPreviewCallback(this);
+        } catch(IOException e){
+            Log.e(TAG, "can not reconnect camera");
+        }catch(Exception e){
+            Log.e(TAG, "can not access camera preview due to some other exception");
+        }*/
+
         return true;
     }
+
+
+    TextureView.SurfaceTextureListener textureListener = new TextureView.SurfaceTextureListener() {
+        @Override
+        public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
+
+            Log.i(TAG, "surface texture available");
+
+        }
+
+        @Override
+        public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
+
+        }
+
+        @Override
+        public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
+            return false;
+        }
+
+        @Override
+        public void onSurfaceTextureUpdated(SurfaceTexture surface) {
+
+            //Log.i(TAG, "surface texture updated");
+            Bitmap bmp = mPreview.getBitmap();
+
+            Log.e(TAG, "Bitmap size (w x h): " + bmp.getWidth() + " x " + bmp.getHeight());
+
+            Bitmap bmpFromJni = getBitmap(bmp);
+
+            Log.e(TAG, "Bitmap From Jni size (w x h): " + bmpFromJni.getWidth() + " x " + bmpFromJni.getHeight());
+
+            if(frameCount < 10) {
+                File file = new File(storagePath);
+                if (!file.exists())
+                    file.mkdir();
+
+                //write bitmal to file
+                String fileName = storagePath + "/img_" + frameCount + ".jpeg";
+
+                FileOutputStream out = null;
+                try {
+                    out = new FileOutputStream(fileName);
+                    bmp.compress(Bitmap.CompressFormat.JPEG, 100, out); // bmp is your Bitmap instance
+                    // PNG is a lossless format, the compression factor (100) is ignored
+                    frameCount++;
+                } catch (Exception e) {
+                    e.printStackTrace();
+                } finally {
+                    try {
+                        if (out != null) {
+                            out.close();
+                        }
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                }
+
+            }
+
+        }
+    };
+
+
+    //private final Camera.PreviewCallback mCameraCallback = new Camera.PreviewCallback() {
+    @Override
+    public void onPreviewFrame(byte[] data, Camera c) {
+        Camera.Parameters parameters = c.getParameters();
+        int width = parameters.getPreviewSize().width;
+        int height = parameters.getPreviewSize().height;
+
+        ByteArrayOutputStream outstr = new ByteArrayOutputStream();
+        YuvImage yuvimage=new YuvImage(data, ImageFormat.NV21,width,height,null);
+
+        yuvimage.compressToJpeg(new Rect(0, 0, width, height), 50, outstr);
+        byte[] imageBytes = outstr.toByteArray();
+        Bitmap image = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.length);
+
+        //Log.i("DEBUG", "Preview Received " + data.length + " wid "  + width + " ht " + height);
+    }
+
+    @Override
+    public void surfaceCreated(SurfaceHolder holder) {
+        Log.i(TAG, "surface created");
+
+        //mMediaRecorder.setPreviewDisplay(sHolder.getSurface());
+
+        /*mCamera = Camera.open();
+        try {
+            mCamera.setPreviewDisplay(sHolder);
+
+            mCamera.startPreview();
+
+            mCamera.setPreviewCallback(this);
+            //mCamera.setPreviewTexture(mPreview.getSurfaceTexture());
+
+        } catch(Exception e){
+            Log.e(TAG, "unknown exception caused");
+        }*/
+
+    }
+
+    @Override
+    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+
+        Log.i(TAG, "surface changed");
+
+    }
+
+    @Override
+    public void surfaceDestroyed(SurfaceHolder holder) {
+
+        //mCamera.release();
+
+    }
+//};
+
 
     /**
      * Asynchronous task for preparing the {@link android.media.MediaRecorder} since it's a long blocking
@@ -240,5 +409,14 @@ public class MainActivity extends Activity {
 
         }
     }
+
+    @SuppressWarnings("JniMissingFunction")
+    public native Bitmap getBitmap(Bitmap bitmap);
+
+    static {
+        System.loadLibrary("opencv_java");
+        System.loadLibrary("Scanner");
+    }
+
 
 }
